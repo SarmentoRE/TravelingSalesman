@@ -43,6 +43,7 @@ int numProc;
 double blockSpace;
 int numBlocks;
 int numCities;
+int coords[2];
 
 inline double distance(City city1, City city2) { return sqrt((pow((city2.x - city1.x),2)) + (pow((city2.y - city1.y),2))); }
 inline bool isSquare(int x) { return (sqrt(x) - floor(sqrt(x)) == 0); }
@@ -560,7 +561,7 @@ void stitch(vector<Block> block)
 	printf("\n");
 }
 */
-vector<City> generateCities(int blockId)
+vector<City> generateCities(int blockId, int rowSize, int colSize)
 {
 	time_t t;
 	srand(t);
@@ -569,16 +570,15 @@ vector<City> generateCities(int blockId)
 	
 	//Find what row and column the block should be in
 	//I am creating a matrix that snakes so all blocks are guarenteed to be somewhat close
-	int sqrBlocks = sqrt(numBlocks);
-	int row = ((blockId - (blockId % sqrBlocks)) / sqrBlocks);
+	int row = ((blockId - (blockId % rowSize)) / rowSize);
 	int col;
 	if((row + 1) % 2)
 	{
-		col = blockId % sqrBlocks;
+		col = blockId % colSize;
 	}
 	else
 	{
-		col = (sqrBlocks - (blockId % sqrBlocks)) - 1;
+		col = (colSize - (blockId % colSize)) - 1;
 	}
 
 	for(int i = 0; i < numCities; i++)
@@ -591,7 +591,7 @@ vector<City> generateCities(int blockId)
 	return cities;
 }
 	
-vector<Block> generateBlocks(int blocksPerProc, int blockId)
+vector<Block> generateBlocks(int blocksPerProc, int blockId, vector<int> dimentions)
 {
 	vector<Block> blocks(blocksPerProc);
 	Block block;
@@ -599,10 +599,33 @@ vector<Block> generateBlocks(int blocksPerProc, int blockId)
 	{
 		block.id = blockId+i;
 		block.minCost = 0;
-		block.minPath = generateCities(block.id);
+		block.minPath = generateCities(block.id, dimentions[0], dimentions[1]);
 		blocks[i] = block;
 	}
 	return blocks;
+}
+
+vector<int> cartesianProcDims()
+{
+	int row;
+	int col;
+	
+	if(isSquare(numProc))
+	{
+		row = sqrt(numProc);
+		col = sqrt(numProc);
+	}
+	else
+	{
+		int divisor = 2;
+		while(numProc % divisor)
+		{
+			divisor++;
+		}
+		row = divisor;
+		col = numProc / divisor;
+	}
+	return vector<int>({row,col});
 }
 
 int main(int argc, char* argv[])
@@ -633,35 +656,20 @@ int main(int argc, char* argv[])
 	MPI_Type_commit(&mpi_city_type);
 	MPI_Status status;
 
-	//get an easy number of blocks to work with
-	if(!procNum)
+	if(argc == 4)
 	{
-		if(argc == 4)
-		{
-			numCities = atoi(argv[1]);
-			numBlocks = atoi(argv[2]);
-			gridSize = atoi(argv[3]);
-		}
-	
-		while(!isSquare(numBlocks))
-		{
-			printf("Please use a square number of blocks!\nEnter new number of blocks:\n");
-			scanf("%d",&numBlocks);	
-		}
-		
-		for(int i = 1; i < numProc; i++)
-		{
-			MPI_Isend(&numBlocks, 1, MPI_INT, i, NUMBLOCKTAG, MPI_COMM_WORLD, & send_request);
-		}
+		numCities = atoi(argv[1]);
+		numBlocks = atoi(argv[2]);
+		gridSize = atoi(argv[3]);
 	}
 	else
 	{
-		if(argc == 4)
+		if(!procNum)
 		{
-			numCities = atoi(argv[1]);
-			gridSize = atoi(argv[3]);
+			printf("usage: ./tsp_mpi citiesPerBlock numberOfBlocks, GridSize\n");
 		}
-		MPI_Recv(&numBlocks, 1, MPI_INT, 0, NUMBLOCKTAG, MPI_COMM_WORLD, &status);
+		MPI_Finalize();
+		exit(1);
 	}
 
 	if(procNum > numBlocks)
@@ -671,7 +679,8 @@ int main(int argc, char* argv[])
 	
 	//how big a single block is
 	blockSpace = (double)gridSize / (double)sqrt(numBlocks);
-	
+	//the dimentions of the martrix	
+	vector<int> dimentions = cartesianProcDims();
 	
 	if(!procNum)
 	{	
@@ -713,7 +722,7 @@ int main(int argc, char* argv[])
 		MPI_Recv(&blocksPerProcess, 1, MPI_INT, 0, BLOCKSTOSENDTAG, MPI_COMM_WORLD, &status);
 		MPI_Recv(&initialBlock, 1, MPI_INT, 0, INITIALBLOCKTAG, MPI_COMM_WORLD, &status);
 	}
-	myBlocks = generateBlocks(blocksPerProcess, initialBlock);
+	myBlocks = generateBlocks(blocksPerProcess, initialBlock, dimentions);
 	
 	//I could spawn threads here and run each tsp this process is responsible in parrallel but it seems out of the scope?
 	for(int i = 0; i < blocksPerProcess; i++)
@@ -723,10 +732,10 @@ int main(int argc, char* argv[])
 		
 	//set up the communication grid
 	MPI_Comm COMM_MATRIX;
-	int dimentions[2] = {sqrt(numBlocks), sqrt(numBlocks)};
 	int wrap[2] = {0,0};
-	MPI_Cart_create(MPI_COMM_WORLD, 2, dimentions, wrap, 0, &COMM_MATRIX);
+	MPI_Cart_create(MPI_COMM_WORLD, 2, &dimentions[0], wrap, 0, &COMM_MATRIX);
 	MPI_Comm_rank(COMM_MATRIX, &numProc);
+	MPI_Cart_coords(COMM_MATRIX, procNum, 2, coords);
 
 //	clock_t after = clock() - before;
 //	int msec = after * 1000 / CLOCKS_PER_SEC;
