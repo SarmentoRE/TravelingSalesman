@@ -11,7 +11,9 @@
 #include <float.h>
 #include <time.h>
 #include <mpi.h>
+#include <cmath>
 #include <stddef.h>
+#include <utility>
 using namespace std;
 
 #define NUMCITYTAG 1
@@ -44,9 +46,18 @@ double blockSpace;
 int numBlocks;
 int numCities;
 int coords[2];
+MPI_Datatype mpi_city_type;
 
 inline double distance(City city1, City city2) { return sqrt((pow((city2.x - city1.x),2)) + (pow((city2.y - city1.y),2))); }
 inline bool isSquare(int x) { return (sqrt(x) - floor(sqrt(x)) == 0); }
+inline double swapFTS(pair<City, City> left, pair<City, City> right)
+{
+	return (distance(left.first, right.second) + distance(left.second, right.first) - distance(left.first, left.second) - distance(right.first, right.second));
+}
+inline double swapFTF(pair<City, City> left, pair<City, City> right)
+{
+	return (distance(left.first, right.first) + distance(left.second, right.second) - distance(left.first, left.second) - distance(right.first, right.second));
+}
 
 double fRand(double min, double max) 
 {
@@ -105,8 +116,8 @@ vector<City> sortCities(vector<int> minPath, vector<City> cities){
 	}
 	return sortedCities;
 }
-/*
-void convertPath(Salesman salesman, vector<City> cities, int blockId)
+
+Block convertPath(Salesman salesman, vector<City> cities, int blockId)
 {
 	vector<City> sortedCities;
 	Block block;
@@ -120,11 +131,9 @@ void convertPath(Salesman salesman, vector<City> cities, int blockId)
 	block.minCost = salesman.minCost;
 	block.minPath = sortedCities;
 	block.id = blockId;
-	block.start = true;
-	block.end = true;
-	allBlocks.push_back(block);
+	return block;
 }
-*/
+
 void genKey(vector<int> &set, int z, long long &key)
 {
 
@@ -259,21 +268,7 @@ Block travel(Block myBlock)
 	finalSalesman.minPath.push_back(allCities[minM]);	
 	finalSalesman.minPath.push_back(0);
 
-	//Print data
-		for(int q = 0; q < finalSalesman.minPath.size(); q++)
-		{
-			printf("%i,",finalSalesman.minPath[q]);
-		}	
-		printf("\n");
-		printf("MinCost: %f\n",finalSalesman.minCost);
-	//	convertPath(finalSalesman, cityList, blockId);
-	Block returnBlock;
-	vector<City> sorted = sortCities(finalSalesman.minPath, cityList);
-	returnBlock.id = myBlock.id;
-	returnBlock.minPath = sorted;
-	//printf("min cost is %f\n",finalSalesman.minCost);
-	returnBlock.minCost = finalSalesman.minCost;
-	return returnBlock;
+	return convertPath(finalSalesman, cityList, myBlock.id);
 }
 
 bool compareCitiesy(City c1, City c2)
@@ -285,288 +280,204 @@ bool compareCitiesx(City c1, City c2)
 {
 	return (c1.x < c2.x);
 }
-/*
-vector<vector<City>> blockBreaker(vector<City> cities){	
-	vector<City> cityList = cities;	
-	int numberOfBlocks = ceil(cityList.size() / pow(BLOCK_SIZE,2));
-	sort(cityList.begin(), cityList.end(), compareCitiesy);
-	vector<City> row;	
-	vector<vector<City>> blocks;
 
-	int counter = 0;
-	unsigned int leftOver;
-	vector<City> block1;
-	vector<City> block2;
-	for(int i = 0; i < cityList.size(); i++)
-	{
-		row.clear();
-		for(int j = 0; j < BLOCK_SIZE*2; j++)
-		{
-			row.push_back(cityList[counter]);
-			counter++;
-			if(counter >= cityList.size())
-				break;
-		}
-		sort(row.begin(), row.end(), compareCitiesx);
-
-		if(row.size() > BLOCK_SIZE)
-		{
-			block1.insert(block1.end(),row.begin(), row.begin()+(BLOCK_SIZE));
-			block2.insert(block2.end(),row.begin()+BLOCK_SIZE, row.end());
-		}
-		else
-		{
-			leftOver = (row.size() / 2);
-			for(int j = 0; j < row.size(); j++)
-			{
-				if(j < leftOver)
-				{
-					block1.push_back(row[j]);
-				}
-				else
-				{
-					block2.push_back(row[j]);
-				}
-			}
-		}
-		if(counter >= cityList.size())
-		{
-			blocks.push_back(block1);
-			blocks.push_back(block2);
-			break;
-		}
-		if((i+1)%BLOCK_SIZE == 0 && i != 0)
-		{
-			if(cityList.size() - counter < 5)
-			{
-				for(int j = 0; j < BLOCK_SIZE; j++)
-				{
-					block1.pop_back();
-					block2.pop_back();
-					counter -= 2;
-				}
-			}
-			blocks.push_back(block1);
-			blocks.push_back(block2);
-			block1.clear();
-			block2.clear();
-		}
-	}	
-
-	//	for(int i = 0; i < blocks.size(); i++)
-	//	{
-	//		printf("Block %i = \n[",i);
-	//		for(int j = 0; j < block1.size(); j ++)
-	//		{
-	//			printf("(%.2f,%.2f)",block1[j].x,block1[j].y);
-	//		}
-	//		printf("\n");
-	//	}	
-	return blocks;
-}
-*/
-bool compareId(Block b1, Block b2){
-	return (b1.id < b2.id);
-}
-/*
-void stitch(vector<Block> block)
+Block merge(Block block1, Block block2)
 {
-	vector<Block> blocks = block;
-	sort(blocks.begin(), blocks.end(), compareId);
+	double swapCostFTS;
+	double swapCostFTF;
+	double swapCost;
+	double minCost = DBL_MAX;
+	bool FTFswap;
+	bool minSwap;
+	vector<City> left = block1.minPath;
+	vector<City> right = block2.minPath;
+	pair<City, City> p1;
+	pair<City, City> p2;
+	pair<pair<City, City>, pair<City, City>> minPair;
+	Block returnBlock;
 
-	vector<City> totalPath;
-	double totalCost = 0;
-	double minDistance = INT_MAX;
-	double currDistance;
-	int minTry;
-	int currBlock = 1;
-	bool reverse = false;
-	bool done = false;
-	int startCase;
-	//lets create a circle :)
-	for(int i = 1; i <= blocks.size(); i++)
+	//this function alone makes me love c++	
+	for(int i = 0; i < left.size(); i++)
 	{
-		minDistance = INT_MAX;
-		Block *block1;
-		Block *block2;
-
-		if(i == ((int)(blocks.size()/2)))
+		p1 = make_pair(left[0], left[1]);
+		for(int j = 0; j < right.size(); j++)
 		{
-			reverse = true;
-			block1 = &blocks[currBlock];
-			block2 = &blocks[currBlock-1];
-			currBlock -= 1;
-		}
-		else if(reverse && currBlock == 0)
-		{
-			block1 = &blocks[currBlock];
-			block2 = &blocks[currBlock + 1];
-			done = true;
-		}
-		else if(reverse)
-		{
-			block1 = &blocks[currBlock];
-			block2 = &blocks[currBlock-2];
-			currBlock -= 2;
-		}
-		else
-		{
-			block1 = &blocks[currBlock];
-			block2 = &blocks[currBlock+2];
-			currBlock += 2;
-		}
-
-		if(block1->start)
-		{
-			if(block2->start)
+			p2 = make_pair(right[0], right[1]);
+			swapCostFTS = swapFTS(p1,p2);
+			swapCostFTF = swapFTF(p1,p2);
+			
+			if(swapCostFTF < swapCostFTS)
 			{
-				//block1 start to block2 start
-				currDistance = distance(block1->minPath[0], block2->minPath[0]);
-				if(currDistance < minDistance)
-				{
-					minDistance = currDistance;
-					minTry = 0;
-				}
+				swapCost = swapCostFTF;
+				FTFswap = true;	
 			}
-
-			if(block2->end == true)
+			else
 			{
-				//block1 start to block2 end
-				currDistance = distance(block1->minPath[0], block2->minPath.back());
-				if(currDistance < minDistance)
-				{
-					minDistance = currDistance;
-					minTry = 1;
-				}
+				swapCost = swapCostFTS;
+				FTFswap = false;
 			}
-		}
-		if(block1->end == true)
-		{
-			if(block2->start == true)
-			{
-				//block1 end to block2 start
-				currDistance = distance(block1->minPath.back(), block2->minPath[0]);
-				if(currDistance < minDistance)
-				{
-					minDistance = currDistance;
-					minTry = 2;
-				}
-			}
-			if(block2->end == true)
-			{
 				
-				//block1 end to block2 end
-				currDistance = distance(block1->minPath.back(), block2->minPath.back());
-				if(currDistance < minDistance)
+			if(swapCost < minCost)
+			{
+				minCost = swapCost;
+				minPair = make_pair(p1,p2);
+				minSwap = FTFswap;
+			}
+			rotate(right.begin(), right.begin() + 1, right.end());
+		}
+		rotate(left.begin(), left.begin() + 1, left.end());
+	}
+
+	//now that you have found the min edge swap connect them together
+	returnBlock.id = block1.id;
+	returnBlock.minCost = block1.minCost + block2.minCost + minCost; 
+	
+	
+//	printf("the best swap is from city1 %i to city2 %i and city1 %i to city2 %i\n",minPair.first.first.id, minPair.second.first.id, minPair.first.second.id, minPair.second.second.id);
+	//disconnect block2 circle
+	block2.minPath.pop_back();
+	
+	//rotate until block2's new edge is at the end
+	while(minPair.second.first.id != block2.minPath[0].id)
+	{
+		rotate(block2.minPath.begin(), block2.minPath.begin() + 1, block2.minPath.end());
+	}
+	rotate(block2.minPath.begin(), block2.minPath.begin() + 1, block2.minPath.end());
+	
+	//insert until you hit the new edge in block1
+	int counter = -1;
+	do
+	{
+		counter++;
+		returnBlock.minPath.push_back(block1.minPath[counter]);
+	}while(minPair.first.first.id != block1.minPath[counter].id);
+	
+	//insert block2
+	if(minSwap)
+	{
+		for(int i = block2.minPath.size()-1; i >= 0; i--)
+		{
+			returnBlock.minPath.push_back(block2.minPath[i]);
+		}
+	}
+	else
+	{
+		for(int i = 0; i < block2.minPath.size(); i++)
+		{
+			returnBlock.minPath.push_back(block2.minPath[i]);
+		}
+	}
+
+	//insert the rest of block1
+	for(int i = counter+1; i < block1.minPath.size(); i++)
+	{
+		returnBlock.minPath.push_back(block1.minPath[i]);
+	}
+
+	return returnBlock;
+}
+
+//Gotta give credit where credit is due
+// https://gist.github.com/rmcgibbo/7178576
+// rmcgibbo made this beautiful custom reduce that uses only sends and recvs
+// I customized it to work for me of course
+Block MPI_ManualReduce(MPI_Comm comm)
+{
+	int recbuffer;
+	Block mergeBlock;
+	int tag = 0;
+	const int lastpower = 1 << ((int)log2(numProc));
+	double minCost;
+	int size;
+	vector<City> cityList;
+	MPI_Status status;
+
+	//for all the ones greator than a power of 2
+	//do procs/2 communications
+	for(int i = lastpower; i < numProc; i++)
+	{
+		if(procNum == i)
+		{
+			size = allBlocks[0].minPath.size();
+			minCost = allBlocks[0].minCost;
+			City *cityArr = (City *)malloc(size * sizeof(City));
+			copy(allBlocks[0].minPath.begin(), allBlocks[0].minPath.end(), cityArr);
+			MPI_Send(&size, 1, MPI_INT, i - lastpower, tag, comm);
+			MPI_Send(cityArr, size, mpi_city_type, i - lastpower, tag, comm);
+			MPI_Send(&minCost, 1, MPI_DOUBLE, i - lastpower, tag, comm);
+		}
+	}
+	for(int i = 0; i < numProc - lastpower; i++)
+	{
+		if(procNum == i)
+		{
+			MPI_Recv(&size, 1, MPI_INT, i + lastpower, tag, comm, &status);
+	
+			City *cityArr2 = (City *)malloc(size * sizeof(City));
+			MPI_Recv(cityArr2, size, mpi_city_type, i + lastpower, tag, comm, &status);
+			MPI_Recv(&minCost, 1, MPI_DOUBLE, i + lastpower, tag, comm, &status);
+			
+			cityList.clear();
+			for(int j = 0; j < size; j++)
+			{
+				cityList.push_back(cityArr2[j]);
+			}
+			mergeBlock.id = 0;
+			mergeBlock.minPath = cityList;
+			mergeBlock.minCost = minCost;
+			allBlocks[0] = merge(allBlocks[0], mergeBlock);	
+		}
+	}
+	///////////
+	
+	//for the rest = power of 2
+	//do perfect logp reduction
+	for(int i = 0; i < ((int)log2(lastpower)); i++)
+	{
+		for(int j = 0; j < lastpower; j += 1 << (i+1))
+		{
+			const int receiver = j;
+			const int sender = j + (1 << i);
+			if(procNum == receiver)
+			{
+				MPI_Recv(&size, 1, MPI_INT, sender, tag, comm, &status);
+		
+				City *cityArr3 = (City *)malloc(size * sizeof(City));
+				MPI_Recv(cityArr3, size, mpi_city_type, sender, tag, comm, &status);
+				MPI_Recv(&minCost, 1, MPI_DOUBLE, sender, tag, comm, &status);
+				
+				cityList.clear();
+				for(int j = 0; j < size; j++)
 				{
-					minDistance = currDistance;
-					minTry = 3;
+					cityList.push_back(cityArr3[j]);
 				}
+				mergeBlock.id = 0;
+				mergeBlock.minPath = cityList;
+				mergeBlock.minCost = minCost;
+				allBlocks[0] = merge(allBlocks[0], mergeBlock);	
+			}
+			else if(procNum == sender)
+			{
+				size = allBlocks[0].minPath.size();
+				minCost = allBlocks[0].minCost;
+				City *cityArr4 = (City *)malloc(size * sizeof(City));
+				copy(allBlocks[0].minPath.begin(), allBlocks[0].minPath.end(), cityArr4);
+				MPI_Send(&size, 1, MPI_INT, receiver, tag, comm);
+				MPI_Send(cityArr4, size, mpi_city_type,receiver, tag, comm);
+				MPI_Send(&minCost, 1, MPI_DOUBLE, receiver, tag, comm);
 			}
 		}
-
-		switch(minTry)
-		{
-			case 0:
-				if(i == 1)
-				{
-					startCase = 0;
-				}
-				if(done)
-				{
-					totalCost += block1->minCost + minDistance;
-                                        totalPath.insert(totalPath.end(), block1->minPath.rbegin(), block1->minPath.rend());
-					break;
-				}
-				block1->start = false;
-				block2->start = false;
-				totalCost += block1->minCost + minDistance;
-				totalPath.insert(totalPath.end(), block1->minPath.rbegin(), block1->minPath.rend());
-				break;	
-			case 1:	
-				if(i == 1)
-				{
-					startCase = 1;
-				}
-				if(done)
-				{
-					totalCost += block1->minCost + minDistance;
-                                        totalPath.insert(totalPath.end(), block1->minPath.rbegin(), block1->minPath.rend());
-					break;
-				}
-				block1->start = false;
-				block2->end = false;
-				totalCost += block1->minCost + minDistance;
-				totalPath.insert(totalPath.end(), block1->minPath.rbegin(), block1->minPath.rend());
-				break;	
-			case 2:
-				if(i == 1)
-				{
-					startCase = 2;
-				}
-				if(done)
-				{
-					totalCost += block1->minCost + minDistance;
-					totalPath.insert(totalPath.end(), block1->minPath.begin(), block1->minPath.end());
-					break;
-				}
-				block1->end = false;
-				block2->start = false;
-				totalCost += block1->minCost + minDistance;
-				totalPath.insert(totalPath.end(), block1->minPath.begin(), block1->minPath.end());
-				break;
-			case 3:
-				if(i == 1)
-				{
-					startCase = 3;
-				}
-				if(done)
-				{
-					totalCost += block1->minCost + minDistance;
-					totalPath.insert(totalPath.end(), block1->minPath.begin(), block1->minPath.end());
-					break;
-				}
-				block1->end = false;
-				block2->end = false;
-				totalCost += block1->minCost + minDistance;
-				totalPath.insert(totalPath.end(), block1->minPath.begin(), block1->minPath.end());
-				break;
-		}
-		if(done)
-		{
-
-			switch(startCase)
-			{
-				case 0:
-					totalPath.push_back(block2->minPath.back());
-					break;
-				case 1:
-					totalPath.push_back(block2->minPath.back());
-					break;
-				case 2:
-					totalPath.push_back(block2->minPath[0]);
-					break;
-				case 3:
-					totalPath.push_back(block2->minPath[0]);
-					break;
-			}	
-		}
 	}
-	printf("total cost was: %.2f\n",totalCost);
-	printf("total path:\n");
-	for(int i = 0; i < totalPath.size(); i ++)
-	{
-		printf("%i,",totalPath[i].id);
-	}
-	printf("\n");
-}
-*/
+	return allBlocks[0];
+}	
+
 vector<City> generateCities(int blockId, int rowSize, int colSize)
 {
 	time_t t;
 	srand(t);
 	vector<City> cities(numCities);
 	City city;
+	string str;
 	
 	//Find what row and column the block should be in
 	//I am creating a matrix that snakes so all blocks are guarenteed to be somewhat close
@@ -580,10 +491,12 @@ vector<City> generateCities(int blockId, int rowSize, int colSize)
 	{
 		col = (colSize - (blockId % colSize)) - 1;
 	}
-
 	for(int i = 0; i < numCities; i++)
 	{
-		city.id = i;
+		str = to_string(i+1);
+		str += to_string(blockId);
+		str += to_string(procNum);
+		city.id = atoi(str.c_str());
 		city.x = fRand(col * blockSpace, (col + 1) * blockSpace);	
 		city.y = fRand(row * blockSpace, (row + 1) * blockSpace);
 		cities[i] = city;
@@ -609,7 +522,7 @@ vector<int> cartesianProcDims()
 {
 	int row;
 	int col;
-	
+
 	if(isSquare(numProc))
 	{
 		row = sqrt(numProc);
@@ -628,6 +541,21 @@ vector<int> cartesianProcDims()
 	return vector<int>({row,col});
 }
 
+void printData()
+{
+	printf("\n");
+	for(int i = 0; i < allBlocks.size(); i++)
+	{
+		printf("MinCost: %.2f \n",allBlocks[i].minCost);
+	//	printf("MinPath:\n");
+	//	for(int j = 0; j < allBlocks[i].minPath.size(); j++)
+	//	{
+	//		printf("%i,",allBlocks[i].minPath[j].id);
+	//	}
+	//	printf("\n");
+	}
+}
+
 int main(int argc, char* argv[])
 {
 	
@@ -639,14 +567,23 @@ int main(int argc, char* argv[])
 	
 	//initialize MPI
 	MPI_Init(&argc, &argv);
-	MPI_Comm_rank(MPI_COMM_WORLD, &procNum);
+	
 	MPI_Comm_size(MPI_COMM_WORLD, &numProc);
+	MPI_Comm_rank(MPI_COMM_WORLD, &procNum);	
+	//the dimentions of the martrix	
+	vector<int> dimentions = cartesianProcDims();
+	//set up the communication grid
+	MPI_Comm COMM_MATRIX;
+	int wrap[2] = {1,1};
+	MPI_Cart_create(MPI_COMM_WORLD, 2, &dimentions[0], wrap, 0, &COMM_MATRIX);
+	MPI_Comm_rank(COMM_MATRIX, &procNum);
+	MPI_Comm_size(COMM_MATRIX, &numProc);
+	MPI_Cart_coords(COMM_MATRIX, procNum, 2, coords);
 	MPI_Request send_request;
 	
 	const int nitems=3;
 	int blocklengths[3] = {1,1,1};
 	MPI_Datatype types[3] = {MPI_INT, MPI_DOUBLE, MPI_DOUBLE};
-	MPI_Datatype mpi_city_type;
 	MPI_Aint offsets[3];
 	offsets[0] = offsetof(City,id);
 	offsets[1] = offsetof(City,x);
@@ -671,16 +608,9 @@ int main(int argc, char* argv[])
 		MPI_Finalize();
 		exit(1);
 	}
-
-	if(procNum > numBlocks)
-	{
-		MPI_Finalize();
-	}
-	
+		
 	//how big a single block is
 	blockSpace = (double)gridSize / (double)sqrt(numBlocks);
-	//the dimentions of the martrix	
-	vector<int> dimentions = cartesianProcDims();
 	
 	if(!procNum)
 	{	
@@ -707,11 +637,11 @@ int main(int argc, char* argv[])
 		for(int i = 1; i < numProc; i++)
 		{
 			blocksToSend = blocksPerProc[i];
-			MPI_Isend(&blocksToSend, 1, MPI_INT, i, BLOCKSTOSENDTAG, MPI_COMM_WORLD, &send_request);
+			MPI_Isend(&blocksToSend, 1, MPI_INT, i, BLOCKSTOSENDTAG, COMM_MATRIX, &send_request);
 			
 			//the initial block index is the addition of how many blocks each previous process has already taken care of
 			initialBlock += blocksPerProc[i-1];
-			MPI_Isend(&initialBlock, 1, MPI_INT, i, INITIALBLOCKTAG, MPI_COMM_WORLD, &send_request);
+			MPI_Isend(&initialBlock, 1, MPI_INT, i, INITIALBLOCKTAG, COMM_MATRIX, &send_request);
 		}
 		//set proc 0 to its correct stats
 		blocksPerProcess = blocksPerProc[0];
@@ -719,27 +649,53 @@ int main(int argc, char* argv[])
 	}
 	else
 	{
-		MPI_Recv(&blocksPerProcess, 1, MPI_INT, 0, BLOCKSTOSENDTAG, MPI_COMM_WORLD, &status);
-		MPI_Recv(&initialBlock, 1, MPI_INT, 0, INITIALBLOCKTAG, MPI_COMM_WORLD, &status);
+		MPI_Recv(&blocksPerProcess, 1, MPI_INT, 0, BLOCKSTOSENDTAG, COMM_MATRIX, &status);
+		MPI_Recv(&initialBlock, 1, MPI_INT, 0, INITIALBLOCKTAG, COMM_MATRIX, &status);
 	}
 	myBlocks = generateBlocks(blocksPerProcess, initialBlock, dimentions);
-	
+
 	//I could spawn threads here and run each tsp this process is responsible in parrallel but it seems out of the scope?
 	for(int i = 0; i < blocksPerProcess; i++)
 	{
 		allBlocks.push_back(travel(myBlocks[i]));
 	}
-		
-	//set up the communication grid
-	MPI_Comm COMM_MATRIX;
-	int wrap[2] = {0,0};
-	MPI_Cart_create(MPI_COMM_WORLD, 2, &dimentions[0], wrap, 0, &COMM_MATRIX);
-	MPI_Comm_rank(COMM_MATRIX, &numProc);
-	MPI_Cart_coords(COMM_MATRIX, procNum, 2, coords);
 
-//	clock_t after = clock() - before;
-//	int msec = after * 1000 / CLOCKS_PER_SEC;
-//	printf("Total time elapsed for tsp: %d seconds %d milliseconds\n",msec/1000,msec%1000);
+	while(allBlocks.size() > 1)
+	{
+		allBlocks[0] = merge(allBlocks[0],allBlocks[1]);
+		allBlocks.erase(allBlocks.begin()+1);
+	}
+			
+	allBlocks[0] = MPI_ManualReduce(COMM_MATRIX);
+
+	if(!procNum)
+	{
+		printData();
+	}
+	
+/*
+	if(!procNum)
+	{
+		vector<City> finalPath = allBlocks[0].minPath;
+		int pathSize = finalPath.size();
+		double pathCost = 0;
+		City previous = finalPath[0];
+		for(int i = 1; i < pathSize; i++)
+		{
+			pathCost += distance(previous, finalPath[i]);
+			previous = finalPath[i];
+		}
+		printf("Actual cost = %.2f\n",pathCost);
+	}
+*/
+	
+	if(!procNum)
+	{
+		clock_t after = clock() - before;
+		int msec = after * 1000 / CLOCKS_PER_SEC;
+		printf("Total time elapsed for tsp: %d seconds %d milliseconds\n",msec/1000,msec%1000);
+	}
+
 	MPI_Finalize();
-	return 0;
+	return(0);
 }
